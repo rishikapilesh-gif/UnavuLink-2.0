@@ -350,6 +350,77 @@ class UnavuLinkStore {
   }
 
   /**
+   * Donor processes a donation request: accept or reject.
+   * On acceptance, the request status becomes 'accepted' and a rescue mission is created.
+   * On rejection, status becomes 'rejected' and listing status reverts to 'available'.
+   */
+  donorRespondToRequest(requestId: string, accept: boolean): { success: boolean; message: string } {
+    const req = this.getRequests().find(r => r.id === requestId);
+    if (!req) return { success: false, message: 'Request not found.' };
+
+    if (accept) {
+      const updatedReq: DonationRequest = { ...req, request_status: 'accepted' };
+      this.updateRequest(updatedReq);
+      this.approveRequestAndCreateMission(updatedReq);
+      return { success: true, message: 'Request accepted and mission created.' };
+    } else {
+      const updatedReq: DonationRequest = { ...req, request_status: 'rejected' };
+      this.updateRequest(updatedReq);
+      const listing = this.getListingById(req.food_listing_id);
+      if (listing && listing.listing_status !== 'available') {
+        this.updateListing({ ...listing, listing_status: 'available' });
+      }
+      return { success: true, message: 'Request rejected.' };
+    }
+  }
+
+  /**
+   * Volunteer responds to an assigned mission (yes/no).
+   * If accepted, mission status becomes 'volunteer_confirmed'.
+   * If declined, mission status becomes 'volunteer_declined'.
+   */
+  volunteerRespondToMission(missionId: string, accept: boolean): { success: boolean; message: string } {
+    const mission = this.getMissionById(missionId);
+    if (!mission) return { success: false, message: 'Mission not found.' };
+
+    if (accept) {
+      const updatedMission: RescueMission = { ...mission, mission_status: 'volunteer_confirmed' };
+      this.updateMission(updatedMission);
+      this.broadcastLiveSync('VOLUNTEER_ACCEPTED', updatedMission, `Volunteer ${updatedMission.volunteer_name} accepted mission ${mission.id}`);
+      return { success: true, message: 'Volunteer accepted the mission.' };
+    } else {
+      const updatedMission: RescueMission = { ...mission, mission_status: 'volunteer_declined' };
+      this.updateMission(updatedMission);
+      this.broadcastLiveSync('VOLUNTEER_DECLINED', updatedMission, `Volunteer ${updatedMission.volunteer_name} declined mission ${mission.id}`);
+      return { success: true, message: 'Volunteer declined the mission.' };
+    }
+  }
+
+  /**
+   * Record a public tip/donation to a charity centre.
+   */
+  addPublicTip(donorId: string, amount: number, note?: string): { success: boolean; tipId: string } {
+    const tip = {
+      id: `tip-${Date.now()}`,
+      donor_id: donorId,
+      amount,
+      note: note || '',
+      created_at: new Date().toISOString()
+    };
+    const tips = this.getStorage<any[]>('public_tips', []);
+    this.setStorage('public_tips', [tip, ...tips].slice(0, 100));
+    return { success: true, tipId: tip.id };
+  }
+
+  /**
+   * Retrieve public tips (optional filter by donor).
+   */
+  getPublicTips(donorId?: string): any[] {
+    const all = this.getStorage<any[]>('public_tips', []);
+    return donorId ? all.filter(t => t.donor_id === donorId) : all;
+  }
+
+  /**
    * SEAMLESS INTERCONNECTION: Approve request and automatically spawn active RescueMission
    */
   approveRequestAndCreateMission(req: DonationRequest, notes?: string): RescueMission {
